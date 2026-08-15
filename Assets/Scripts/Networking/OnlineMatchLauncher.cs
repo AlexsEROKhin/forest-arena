@@ -37,7 +37,7 @@ namespace LocalPvp.Networking
         private OnlineArenaSession arenaSession;
         private string joinCodeInput = string.Empty;
         private string roomCode = string.Empty;
-        private string status = "Выберите режим игры";
+        private string status = "Choose a game mode";
         private bool operationRunning;
 
         public string RoomCode => roomCode;
@@ -80,30 +80,30 @@ namespace LocalPvp.Networking
 
             if (state == MenuState.Joining)
             {
-                GUILayout.Label("КОД КОМНАТЫ", labelStyle);
+                GUILayout.Label("ROOM CODE", labelStyle);
                 joinCodeInput = GUILayout.TextField(joinCodeInput.ToUpperInvariant(), 12, codeStyle, GUILayout.Height(46f));
                 GUILayout.Space(12f);
                 GUI.enabled = !operationRunning && !string.IsNullOrWhiteSpace(joinCodeInput);
-                if (GUILayout.Button("ПОДКЛЮЧИТЬСЯ", GUILayout.Height(44f)))
+                if (GUILayout.Button("CONNECT", GUILayout.Height(44f)))
                     _ = JoinRoomAsync();
                 GUI.enabled = !operationRunning;
-                if (GUILayout.Button("НАЗАД", GUILayout.Height(36f)))
+                if (GUILayout.Button("BACK", GUILayout.Height(36f)))
                 {
                     state = MenuState.Main;
-                    status = "Выберите режим игры";
+                    status = "Choose a game mode";
                 }
             }
             else
             {
                 GUI.enabled = !operationRunning;
-                if (GUILayout.Button("СОЗДАТЬ СЕТЕВУЮ ИГРУ", GUILayout.Height(46f)))
+                if (GUILayout.Button("CREATE ONLINE ROOM", GUILayout.Height(46f)))
                     _ = HostRoomAsync();
-                if (GUILayout.Button("ВОЙТИ ПО КОДУ", GUILayout.Height(46f)))
+                if (GUILayout.Button("JOIN WITH CODE", GUILayout.Height(46f)))
                 {
                     state = MenuState.Joining;
-                    status = "Введите код, который показан у создателя комнаты";
+                    status = "Enter the room code shown by the host";
                 }
-                if (GUILayout.Button("НА ОДНОМ КОМПЬЮТЕРЕ", GUILayout.Height(42f)))
+                if (GUILayout.Button("LOCAL TWO-PLAYER", GUILayout.Height(42f)))
                     StartLocalGame();
             }
 
@@ -120,8 +120,8 @@ namespace LocalPvp.Networking
             if (roomCode.Length > 0)
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label($"КОД: {roomCode}", codeStyle);
-                if (GUILayout.Button("КОПИРОВАТЬ", GUILayout.Width(120f), GUILayout.Height(30f)))
+                GUILayout.Label($"CODE: {roomCode}", codeStyle);
+                if (GUILayout.Button("COPY", GUILayout.Width(120f), GUILayout.Height(30f)))
                     GUIUtility.systemCopyBuffer = roomCode;
                 GUILayout.EndHorizontal();
             }
@@ -133,7 +133,7 @@ namespace LocalPvp.Networking
             if (operationRunning) return;
             operationRunning = true;
             state = MenuState.Connecting;
-            status = "Создаём комнату…";
+            status = "Creating room...";
             try
             {
                 await InitializeServicesAsync();
@@ -148,7 +148,7 @@ namespace LocalPvp.Networking
                 networkManager.OnClientConnectedCallback += OnClientConnected;
                 networkManager.OnClientDisconnectCallback += OnClientDisconnected;
                 state = MenuState.InRoom;
-                status = "Ожидание второго игрока";
+                status = "Waiting for Player 2";
                 Time.timeScale = 1f;
             }
             catch (Exception exception)
@@ -166,7 +166,7 @@ namespace LocalPvp.Networking
             if (operationRunning) return;
             operationRunning = true;
             state = MenuState.Connecting;
-            status = "Подключаемся к комнате…";
+            status = "Connecting...";
             try
             {
                 await InitializeServicesAsync();
@@ -181,7 +181,7 @@ namespace LocalPvp.Networking
                 arenaSession.BeginAsClient();
                 roomCode = string.Empty;
                 state = MenuState.InRoom;
-                status = "Подключение…";
+                status = "Connecting...";
                 Time.timeScale = 1f;
             }
             catch (Exception exception)
@@ -208,9 +208,12 @@ namespace LocalPvp.Networking
             var networkObject = new GameObject("Online Network Manager");
             networkManager = networkObject.AddComponent<NetworkManager>();
             var transport = networkObject.AddComponent<UnityTransport>();
-            networkManager.NetworkConfig.NetworkTransport = transport;
-            networkManager.NetworkConfig.EnableSceneManagement = false;
-            networkManager.NetworkConfig.ConnectionApproval = false;
+            networkManager.NetworkConfig = new NetworkConfig
+            {
+                NetworkTransport = transport,
+                EnableSceneManagement = false,
+                ConnectionApproval = false
+            };
             arenaSession = networkObject.AddComponent<OnlineArenaSession>();
         }
 
@@ -227,11 +230,11 @@ namespace LocalPvp.Networking
             if (networkManager.IsHost)
             {
                 if (clientId != NetworkManager.ServerClientId)
-                    status = "Второй игрок подключён — бой начался";
+                    status = "Player 2 connected - fight!";
             }
             else if (clientId == networkManager.LocalClientId)
             {
-                status = "Вы подключены как PLAYER 2";
+                status = "Connected as PLAYER 2";
             }
         }
 
@@ -239,9 +242,9 @@ namespace LocalPvp.Networking
         {
             if (networkManager == null) return;
             if (networkManager.IsHost && clientId != NetworkManager.ServerClientId)
-                status = "Второй игрок отключился — ожидание подключения";
+                status = "Player 2 disconnected - waiting";
             else if (!networkManager.IsHost)
-                status = "Соединение с хостом потеряно";
+                status = "Connection to host lost";
         }
 
         private void StartLocalGame()
@@ -253,7 +256,7 @@ namespace LocalPvp.Networking
         private void HandleConnectionError(Exception exception)
         {
             Debug.LogException(exception, this);
-            status = $"Не удалось подключиться: {exception.Message}";
+            status = GetConnectionErrorMessage(exception);
             state = MenuState.Main;
             roomCode = string.Empty;
             Time.timeScale = 0f;
@@ -262,6 +265,19 @@ namespace LocalPvp.Networking
             Destroy(networkManager.gameObject);
             networkManager = null;
             arenaSession = null;
+        }
+
+        private static string GetConnectionErrorMessage(Exception exception)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                if (current.Message.IndexOf("services couldn't be initialized", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return "Online mode is not configured yet. Link this project to Unity Cloud Services and enable Relay.";
+                }
+            }
+
+            return $"Connection failed: {exception.Message}";
         }
 
         private static void EnsureStyles()
