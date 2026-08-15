@@ -366,5 +366,30 @@ namespace LocalPvp.Player
                 : float.NegativeInfinity;
             if (body != null) body.linearVelocity = velocity;
         }
+
+        /// <summary>
+        /// Gently corrects a locally predicted player toward the authoritative
+        /// host position without taking local movement control away.
+        /// </summary>
+        public void ReconcilePredictedPosition(
+            Vector2 authoritativePosition,
+            float snapDistance,
+            float correctionRate)
+        {
+            if (networkPresentationMode || body == null || !body.simulated) return;
+
+            var distance = Vector2.Distance(body.position, authoritativePosition);
+            if (distance > Mathf.Max(0.1f, snapDistance))
+            {
+                body.position = authoritativePosition;
+                return;
+            }
+
+            if (distance < 0.04f) return;
+            body.position = Vector2.Lerp(
+                body.position,
+                authoritativePosition,
+                Mathf.Clamp01(Mathf.Max(0f, correctionRate) * Time.unscaledDeltaTime));
+        }
     }
 }

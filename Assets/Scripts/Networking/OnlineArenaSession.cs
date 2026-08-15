@@ -14,13 +14,17 @@ namespace LocalPvp.Networking
     {
         private const string InputMessage = "LocalPvp/Input/v1";
         private const string SnapshotMessage = "LocalPvp/Snapshot/v1";
-        private const float SnapshotInterval = 1f / 25f;
+        private const float SnapshotInterval = 1f / 50f;
         private const float PositionSnapDistance = 4f;
+        private const float LocalPlayerSnapDistance = 1.5f;
+        private const float LocalPlayerCorrectionRate = 6f;
+        private const float LocalSnapshotExtrapolation = 0.08f;
 
         private readonly PlayerController[] controllers = new PlayerController[2];
         private readonly PlayerCombat[] combats = new PlayerCombat[2];
         private readonly PlayerHealth[] health = new PlayerHealth[2];
         private readonly Vector2[] targetPositions = new Vector2[2];
+        private readonly Vector2[] targetVelocities = new Vector2[2];
         private readonly bool[] hasTargetPosition = new bool[2];
 
         private NetworkManager manager;
@@ -28,6 +32,7 @@ namespace LocalPvp.Networking
         private InputFrame remoteInput;
         private InputFrame previousHostInput;
         private InputFrame previousRemoteInput;
+        private InputFrame previousPredictedInput;
         private float nextSnapshotAt;
         private bool running;
         private bool host;
@@ -90,11 +95,17 @@ namespace LocalPvp.Networking
 
         private void SetClientPresentationMode()
         {
-            for (var index = 0; index < 2; index++)
-            {
-                controllers[index]?.SetNetworkPresentationMode(true);
-                combats[index]?.SetNetworkPresentationMode(true);
-            }
+            // Player 1 is the remote host and remains a pure visual replica.
+            controllers[0]?.SetNetworkPresentationMode(true);
+            combats[0]?.SetNetworkPresentationMode(true);
+
+            // Player 2 is controlled by this browser. Simulate movement locally
+            // for immediate response, then reconcile it with host snapshots.
+            // Combat damage remains host-authoritative; only its animation is
+            // previewed locally while the input travels through Relay.
+            controllers[1]?.SetNetworkPresentationMode(false);
+            controllers[1]?.SetExternalInputMode(true);
+            combats[1]?.SetNetworkPresentationMode(true);
         }
 
         private void Update()
@@ -114,6 +125,7 @@ namespace LocalPvp.Networking
             }
             else
             {
+                ApplyPredictedInput(localInput);
                 SendInput(localInput);
                 SmoothRemotePlayers();
             }
@@ -142,6 +154,36 @@ namespace LocalPvp.Networking
             controllers[index].SubmitExternalInput(current.Horizontal, jumpPressed, jumpReleased, dodgePressed);
             combats[index].SubmitExternalInput(attackPressed, kickPressed, current.Dodge);
             previous = current;
+        }
+
+        private void ApplyPredictedInput(InputFrame current)
+        {
+            if (controllers[1] == null) return;
+
+            var jumpPressed = current.Jump && !previousPredictedInput.Jump;
+            var jumpReleased = !current.Jump && previousPredictedInput.Jump;
+            var attackPressed = current.Attack && !previousPredictedInput.Attack;
+            var kickPressed = current.Kick && !previousPredictedInput.Kick;
+            var dodgePressed = current.Dodge && !previousPredictedInput.Dodge
+                && !current.Attack && !current.Kick;
+
+            if (health[1] == null || !health[1].IsDead)
+            {
+                controllers[1].SubmitExternalInput(
+                    current.Horizontal,
+                    jumpPressed,
+                    jumpReleased,
+                    dodgePressed);
+
+                if (attackPressed || kickPressed)
+                {
+                    combats[1]?.PreviewNetworkAttack(
+                        kickPressed,
+                        current.Dodge && Mathf.Abs(current.Horizontal) > 0.1f);
+                }
+            }
+
+            previousPredictedInput = current;
         }
 
         private void SendInput(InputFrame input)
@@ -253,16 +295,20 @@ namespace LocalPvp.Networking
             reader.ReadValueSafe(out bool recentlyHit);
 
             targetPositions[index] = new Vector2(x, y);
+            targetVelocities[index] = new Vector2(velocityX, velocityY);
             hasTargetPosition[index] = true;
-            controllers[index]?.ApplyNetworkPresentation(
-                new Vector2(velocityX, velocityY),
-                direction,
-                movement,
-                grounded,
-                dodging,
-                dodgeElapsed,
-                jumpsUsed,
-                jumpElapsed);
+            if (index == 0)
+            {
+                controllers[index]?.ApplyNetworkPresentation(
+                    new Vector2(velocityX, velocityY),
+                    direction,
+                    movement,
+                    grounded,
+                    dodging,
+                    dodgeElapsed,
+                    jumpsUsed,
+                    jumpElapsed);
+            }
             combats[index]?.ApplyNetworkPresentation(attacking, kicking, (AttackType)attackType, attackElapsed);
             health[index]?.ApplyNetworkPresentation(currentHealth, dead, recentlyHit);
         }
@@ -273,10 +319,20 @@ namespace LocalPvp.Networking
             {
                 if (!hasTargetPosition[index] || health[index] == null) continue;
                 var current = (Vector2)health[index].transform.position;
-                var target = targetPositions[index];
+                var target = targetPositions[index] + targetVelocities[index] * LocalSnapshotExtrapolation;
+
+                if (index == 1 && controllers[index] != null)
+                {
+                    controllers[index].ReconcilePredictedPosition(
+                        target,
+                        LocalPlayerSnapDistance,
+                        LocalPlayerCorrectionRate);
+                    continue;
+                }
+
                 health[index].transform.position = Vector2.Distance(current, target) > PositionSnapDistance
                     ? target
-                    : Vector2.Lerp(current, target, 18f * Time.unscaledDeltaTime);
+                    : Vector2.Lerp(current, target, 24f * Time.unscaledDeltaTime);
             }
         }
 

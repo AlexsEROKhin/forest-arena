@@ -43,6 +43,7 @@ namespace LocalPvp.Player
         private bool externalAttackPressed;
         private bool externalKickPressed;
         private bool externalDodgeHeld;
+        private float networkPreviewUntil = float.NegativeInfinity;
 
 
         public void Configure(PlayerControls newControls) => controls = newControls;
@@ -269,12 +270,35 @@ namespace LocalPvp.Player
             float elapsed)
         {
             if (!networkPresentationMode) return;
+            if (!syncedAttacking && Time.time < networkPreviewUntil) return;
             attacking = syncedAttacking;
             kicking = syncedKicking;
             CurrentAttackType = attackType;
             attackStartedAt = syncedAttacking
                 ? Time.time - Mathf.Max(0f, elapsed)
                 : float.NegativeInfinity;
+            if (syncedAttacking) networkPreviewUntil = float.NegativeInfinity;
+        }
+
+        /// <summary>
+        /// Starts the local attack pose immediately on an online client. The
+        /// host still performs the real hit detection and damage calculation.
+        /// </summary>
+        public void PreviewNetworkAttack(bool kick, bool dashAttack)
+        {
+            if (!networkPresentationMode || attacking) return;
+
+            attacking = true;
+            kicking = kick;
+            CurrentAttackType = kick
+                ? AttackType.Kick
+                : !controller.IsGrounded
+                    ? AttackType.Air
+                    : dashAttack
+                        ? AttackType.Dash
+                        : AttackType.Basic;
+            attackStartedAt = Time.time;
+            networkPreviewUntil = Time.time + 0.22f;
         }
     }
 }

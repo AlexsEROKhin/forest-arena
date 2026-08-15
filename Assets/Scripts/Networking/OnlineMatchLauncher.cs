@@ -138,7 +138,8 @@ namespace LocalPvp.Networking
             {
                 await InitializeServicesAsync();
                 CreateNetworkManager();
-                var allocation = await RelayService.Instance.CreateAllocationAsync(1);
+                var preferredRegion = await GetPreferredRelayRegionAsync();
+                var allocation = await RelayService.Instance.CreateAllocationAsync(1, preferredRegion);
                 roomCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
                 ConfigureRelay(allocation.ToRelayServerData("wss"));
                 if (!networkManager.StartHost())
@@ -202,6 +203,48 @@ namespace LocalPvp.Networking
                 await AuthenticationService.Instance.SignInAnonymouslyAsync();
         }
 
+        private static async Task<string> GetPreferredRelayRegionAsync()
+        {
+            // Relay QoS probing is unavailable in WebGL. For European browser
+            // time zones, select a nearby region explicitly instead of letting
+            // the service fall back to its potentially distant default.
+            if (Application.platform != RuntimePlatform.WebGLPlayer) return null;
+            var utcOffset = TimeZoneInfo.Local.GetUtcOffset(DateTime.UtcNow).TotalHours;
+            if (utcOffset < -1d || utcOffset > 4d) return null;
+
+            try
+            {
+                var regions = await RelayService.Instance.ListRegionsAsync();
+                Region europeanFallback = null;
+                foreach (var region in regions)
+                {
+                    var searchable = $"{region.Id} {region.Description}".ToLowerInvariant();
+                    if (searchable.Contains("frankfurt") || searchable.Contains("europe-central"))
+                    {
+                        Debug.Log($"Using nearby Relay region: {region.Description} ({region.Id})");
+                        return region.Id;
+                    }
+
+                    if (europeanFallback == null
+                        && (searchable.Contains("europe") || searchable.Contains("germany")))
+                    {
+                        europeanFallback = region;
+                    }
+                }
+
+                if (europeanFallback != null)
+                {
+                    Debug.Log($"Using European Relay region: {europeanFallback.Description} ({europeanFallback.Id})");
+                    return europeanFallback.Id;
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Could not select a nearby Relay region: {exception.Message}");
+            }
+            return null;
+        }
+
         private void CreateNetworkManager()
         {
             if (networkManager != null) return;
@@ -211,6 +254,7 @@ namespace LocalPvp.Networking
             networkManager.NetworkConfig = new NetworkConfig
             {
                 NetworkTransport = transport,
+                TickRate = 60,
                 EnableSceneManagement = false,
                 ConnectionApproval = false
             };
